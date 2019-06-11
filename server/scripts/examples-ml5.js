@@ -1,10 +1,7 @@
 import fs from 'fs';
 import rp from 'request-promise';
 import Q from 'q';
-import mongoose from 'mongoose';
 import objectID from 'bson-objectid';
-import shortid from 'shortid';
-import User from '../models/user';
 import Project from '../models/project';
 
 // TODO: Change branchName if necessary
@@ -14,6 +11,7 @@ const baseUrl = 'https://api.github.com/repos/ml5js/ml5-examples/contents';
 const clientId = process.env.GITHUB_ID;
 const clientSecret = process.env.GITHUB_SECRET;
 const editorUsername = process.env.ML5_EXAMPLES_USERNAME;
+const personalAccessToken = process.env.EDITOR_API_ACCESS_TOKEN;
 const headers = {
   'User-Agent': 'p5js-web-editor/0.0.1'
 };
@@ -29,14 +27,15 @@ const requestOptions = {
   json: true
 };
 
-const mongoConnectionString = process.env.MONGO_URL;
-mongoose.connect(mongoConnectionString, {
-  useMongoClient: true
-});
-mongoose.connection.on('error', () => {
-  console.error('MongoDB Connection Error. Please make sure that MongoDB is running.');
-  process.exit(1);
-});
+const editorRequestOptions = {
+  url: process.env.P5_API || 'http://localhost:8000/api',
+  method: 'GET',
+  headers: {
+    ...headers,
+    Authorization: `Basic ${Buffer.from(`${editorUsername}:${personalAccessToken}`).toString('base64')}`
+  },
+  json: true
+};
 
 /**
  * ---------------------------------------------------------
@@ -50,6 +49,46 @@ mongoose.connection.on('error', () => {
 function flatten(list) {
   return list.reduce((a, b) => a.concat(Array.isArray(b) ? flatten(b) : b), []);
 }
+
+/**
+ * Fetch data for a single HTML/JS file, or return
+ * an url to the file's CDN location
+ */
+async function fetchFileContent(item) {
+  const { name } = item;
+  const file = { url: item.url };
+
+  // if it is an html or js file
+  if (
+    (file.url != null && name.endsWith('.html')) ||
+    name.endsWith('.js')
+  ) {
+    const options = Object.assign({}, requestOptions);
+    options.url = `${file.url}`;
+
+    if (
+      options.url !== undefined ||
+      options.url !== null ||
+      options.url !== ''
+    ) {
+      file.content = await rp(options);
+      // NOTE: remove the URL property if there's content
+      // Otherwise the p5 editor will try to pull from that url
+      if (file.content !== null) delete file.url;
+    }
+
+    return file;
+    // if it is NOT an html or js file
+  }
+
+  if (file.url) {
+    const cdnRef = `https://cdn.jsdelivr.net/gh/ml5js/ml5-examples@${branchName}${file.url.split(branchName)[1]}`;
+    file.url = cdnRef;
+  }
+
+  return file;
+}
+
 
 /**
  * STEP 1: Get the top level cateogories
@@ -80,9 +119,14 @@ async function getCategoryExamples(sketchRootList) {
     options.url = `${options.url}${categories.path}${branchRef}`;
     // console.log(options)
     const sketchDirs = await rp(options);
-    const result = flatten(sketchDirs);
 
-    return result;
+    try {
+      const result = flatten(sketchDirs);
+
+      return result;
+    } catch (err) {
+      return [];
+    }
   });
 
   const sketchList = await Q.all(sketchRootCategories);
@@ -181,66 +225,25 @@ function traverseAndFormat(parentObject) {
  * Traverse the tree and flatten for project.files[]
  * @param {*} projectFileTree
  */
-function traverseAndFlatten(projectFileTree) {
-  const r = objectID().toHexString();
-
-  const projectRoot = {
-    name: 'root',
-    id: r,
-    _id: r,
-    children: [],
-    fileType: 'folder'
-  };
-
-  let currentParent;
-
-  const output = projectFileTree.reduce(
-    (result, item, idx) => {
-      if (idx < projectFileTree.length) {
-        projectRoot.children.push(item.id);
-      }
+async function traverseAndFlatten(projectFileTree) {
+  return projectFileTree.reduce(
+    async (previousPromise, item, idx) => {
+      const result = await previousPromise;
 
       if (item.fileType === 'file') {
-        if (item.name === 'sketch.js') {
-          item.isSelectedFile = true;
-        }
-        result.push(item);
+        result[item.name] = await fetchFileContent(item)
       }
 
-      // here's where the magic happens *twinkles*
       if (item.fileType === 'folder') {
-        // recursively go down the tree of children
-        currentParent = traverseAndFlatten(item.children);
-        // the above will return an array of the children files
-        // concatenate that with the results
-        result = result.concat(currentParent); // eslint-disable-line no-param-reassign
-        // since we want to get the children ids,
-        // we can map the child ids to the current item
-        // then push that to our result array to get
-        // our flat files array.
-        item.children = item.children.map(child => child.id);
-        result.push(item);
+        result[item.name] = {
+          files: await traverseAndFlatten(item.children)
+        };
       }
 
       return result;
     },
-    [projectRoot]
+    {}
   );
-
-  // Kind of hacky way to remove all roots other than the starting one
-  let counter = 0;
-  output.forEach((item, idx) => {
-    if (item.name === 'root') {
-      if (counter === 0) {
-        counter += 1;
-      } else {
-        output.splice(idx, 1);
-        counter += 1;
-      }
-    }
-  });
-
-  return output;
 }
 
 /**
@@ -249,16 +252,14 @@ function traverseAndFlatten(projectFileTree) {
  * @param {*} sketch
  * @param {*} user
  */
-function formatSketchForStorage(sketch, user) {
-  const newProject = new Project({
-    _id: shortid.generate(),
+async function formatSketchForStorage(sketch, user) {
+  const newProject = {
     name: sketch.name,
-    user: user._id,
-    files: [] // <== add files to this array as file objects and add _id reference to children of root
-  });
+    files: {} // <== add files to this object
+  };
 
   let projectFiles = traverseAndFormat(sketch);
-  projectFiles = traverseAndFlatten(projectFiles);
+  projectFiles = await traverseAndFlatten(projectFiles);
   newProject.files = projectFiles;
   return newProject;
 }
@@ -271,68 +272,48 @@ function formatSketchForStorageAll(sketchWithItems, user) {
 
   sketchList = sketchList.map(sketch => formatSketchForStorage(sketch, user));
 
-  return sketchList;
+  return Promise.all(sketchList);
 }
 
 /**
- * Get all the content for the relevant files in project.files[]
- * @param {*} projectObject
+ * Fetch a list of all projects from the API
  */
-async function fetchSketchContent(projectObject) {
-  const output = Object.assign({}, JSON.parse(JSON.stringify(projectObject)));
+async function getProjectsList() {
+  const options = Object.assign({}, editorRequestOptions);
+  options.url = `${options.url}/${editorUsername}/sketches`;
+  const results = await rp(options);
 
-  const newFiles = output.files.map(async (item, i) => {
-    // if it is an html or js file
-    if (
-      (item.fileType === 'file' && item.name.endsWith('.html')) ||
-      item.name.endsWith('.js')
-    ) {
-      const options = Object.assign({}, requestOptions);
-      options.url = `${item.url}`;
-
-      if (
-        options.url !== undefined ||
-        options.url !== null ||
-        options.url !== ''
-      ) {
-        item.content = await rp(options);
-        // NOTE: remove the URL property if there's content
-        // Otherwise the p5 editor will try to pull from that url
-        if (item.content !== null) delete item.url;
-      }
-
-      return item;
-      // if it is NOT an html or js file
-    }
-
-    if (item.url) {
-      const cdnRef = `https://cdn.jsdelivr.net/gh/ml5js/ml5-examples@${branchName}${
-        item.url.split(branchName)[1]
-      }`;
-      item.content = cdnRef;
-      item.url = cdnRef;
-    }
-
-    return item;
-  });
-
-  output.files = await Q.all(newFiles);
-  return output;
+  return results.sketches;
 }
 
 /**
- * STEP 5
- * Get all the content for the relevant files in project.files[] for all sketches
- * @param {*} formattedSketchList
+ * Delete a project
  */
-async function fetchSketchContentAll(formattedSketchList) {
-  let output = formattedSketchList.slice(0);
+async function deleteProject(project) {
+  const options = Object.assign({}, editorRequestOptions);
+  options.method = 'DELETE';
+  options.url = `${options.url}/sketches/${project.id}`;
+  const results = await rp(options);
 
-  output = output.map(async item => fetchSketchContent(item));
+  return results;
+}
 
-  output = await Q.all(output);
+/**
+ * Create a new project
+ */
+async function createProject(project) {
+  try {
+    const options = Object.assign({}, editorRequestOptions);
+    options.method = 'POST';
+    options.url = `${options.url}/sketches`;
+    options.body = project;
 
-  return output;
+    const results = await rp(options);
+
+    return results;
+  } catch (err) {
+    throw err;
+  }
 }
 
 /**
@@ -342,42 +323,31 @@ async function fetchSketchContentAll(formattedSketchList) {
  * @param {*} user
  */
 async function createProjectsInP5User(filledProjectList, user) {
-  const userProjects = await Project.find({ user: user._id });
-  const removeProjects = userProjects.map(async project => Project.remove({ _id: project._id }));
-  await Q.all(removeProjects);
-  console.log('deleted old projects!');
+  const existingProjects = await getProjectsList();
 
-  const newProjects = filledProjectList.map(async (project) => {
-    const item = new Project(project);
-    console.log(`saving ${project.name}`);
-    await item.save();
-  });
-  await Q.all(newProjects);
-  console.log(`Projects saved to User: ${editorUsername}!`);
-}
+  console.log('**', existingProjects)
 
-/**
- * STEP 0
- * CHECK if user exists, ifnot create one
- *
- */
-async function checkP5User() {
-  const user = await User.findOne({ username: editorUsername });
+  try {
+    await Q.all(existingProjects.map(deleteProject));
+    console.log('deleted old projects!');
+  } catch (error) {
+    console.log('Problem deleting projects');
+    console.log(error);
+    process.exit(1);
+  }
 
-  if (!user) {
-    const ml5user = new User({
-      username: editorUsername,
-      email: process.env.ML5_EXAMPLES_EMAIL,
-      password: process.env.ML5_EXAMPLES_PASS
+  try {
+    const newProjects = filledProjectList.map(async (project) => {
+      console.log(`saving ${project.name}`);
+      await createProject(project);
     });
-
-    await ml5user.save((saveErr) => {
-      if (saveErr) throw saveErr;
-      console.log(`Created a user p5${ml5user}`);
-    });
+    await Q.all(newProjects);
+    console.log(`Projects saved to User: ${editorUsername}!`);
+  } catch (error) {
+    console.log('Error saving projects');
+    console.log(error);
   }
 }
-
 
 /**
  * ---------------------------------------------------------
@@ -394,18 +364,19 @@ async function checkP5User() {
  * Delete existing and save
  */
 async function make() {
-  await checkP5User();
-  // Get the user
-  const user = await User.findOne({
-    username: editorUsername
-  });
   // Get the categories and their examples
   const categories = await getCategories();
   const categoryExamples = await getCategoryExamples(categories);
-  const examplesWithResourceTree = await traverseSketchTreeAll(categoryExamples);
-  const formattedSketchList = formatSketchForStorageAll(examplesWithResourceTree, user);
-  const filledProjectList = await fetchSketchContentAll(formattedSketchList);
-  await createProjectsInP5User(filledProjectList, user);
+
+  // TODO: For testing we just get the first example
+  // const examplesWithResourceTree = await traverseSketchTreeAll(categoryExamples);
+  const examplesWithResourceTree = await traverseSketchTreeAll(categoryExamples.slice(0, 1));
+  const formattedSketchList = await formatSketchForStorageAll(examplesWithResourceTree);
+  // const filledProjectList = await fetchSketchContentAll(formattedSketchList);
+
+  // console.log(JSON.stringify(formattedSketchList));
+
+  await createProjectsInP5User(formattedSketchList);
   console.log('done!');
   process.exit();
 }
@@ -419,19 +390,12 @@ async function make() {
  * Delete existing and save
  */
 async function test() {
-  await checkP5User();
-  // Get the user
-  const user = await User.findOne({
-    username: editorUsername
-  });
-
   // read from file while testing
   const examplesWithResourceTree = JSON.parse(fs.readFileSync('./ml5-examplesWithResourceTree.json'));
 
-  const formattedSketchList = formatSketchForStorageAll(examplesWithResourceTree, user);
+  const formattedSketchList = await formatSketchForStorageAll(examplesWithResourceTree);
 
-  const filledProjectList = await fetchSketchContentAll(formattedSketchList);
-  await createProjectsInP5User(filledProjectList, user);
+  await createProjectsInP5User(formattedSketchList);
   console.log('done!');
   process.exit();
 }
