@@ -1,4 +1,3 @@
-import i18next from 'i18next';
 import * as ActionTypes from '../../../constants';
 
 
@@ -13,7 +12,7 @@ const initialState = {
   soundOutput: false,
   theme: 'light',
   autorefresh: false,
-  language: 'en-US'
+  language: null
 };
 
 const preferences = (state = initialState, action) => {

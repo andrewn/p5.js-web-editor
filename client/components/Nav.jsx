@@ -5,12 +5,13 @@ import { withRouter } from 'react-router';
 import { Link } from 'react-router';
 import classNames from 'classnames';
 import { withTranslation } from 'react-i18next';
-import i18next from 'i18next';
+
 import * as IDEActions from '../modules/IDE/actions/ide';
 import * as toastActions from '../modules/IDE/actions/toast';
 import * as projectActions from '../modules/IDE/actions/project';
 import { setAllAccessibleOutput, setLanguage } from '../modules/IDE/actions/preferences';
 import { logoutUser } from '../modules/User/actions';
+import { languageCodes } from '../i18n';
 
 import getConfig from '../utils/getConfig';
 import { metaKeyName, } from '../utils/metaKey';
@@ -581,7 +582,7 @@ class Nav extends React.PureComponent {
               <button
                 onFocus={this.handleFocusForLang}
                 onBlur={this.handleBlur}
-                value="en-US"
+                value={languageCodes.usEnglish}
                 onClick={e => this.handleLangSelection(e)}
               >English
               </button>
@@ -590,7 +591,7 @@ class Nav extends React.PureComponent {
               <button
                 onFocus={this.handleFocusForLang}
                 onBlur={this.handleBlur}
-                value="es-419"
+                value={languageCodes.latinSpanish}
                 onClick={e => this.handleLangSelection(e)}
               >
                 Español

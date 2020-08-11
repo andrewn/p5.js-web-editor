@@ -3,8 +3,13 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import Backend from 'i18next-http-backend';
 
-const fallbackLng = ['en-US'];
-const availableLanguages = ['en-US', 'es-419'];
+export const languageCodes = {
+  usEnglish: 'en-US',
+  latinSpanish: 'es-419'
+};
+
+const fallbackLng = [languageCodes.usEnglish];
+const availableLanguages = Object.values(languageCodes);
 
 const options = {
   loadPath: '/locales/{{lng}}/translations.json',
@@ -19,7 +24,7 @@ i18n
   // .use(LanguageDetector)// to detect the language from currentBrowser
   .use(Backend) // to fetch the data from server
   .init({
-    lng: 'en-US',
+    lng: languageCodes.usEnglish, // language to use (overrides language detection).
     fallbackLng, // if user computer language is not on the list of available languages, than we will be using the fallback language specified earlier
     debug: false,
     backend: options,
