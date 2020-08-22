@@ -1,25 +1,26 @@
 import i18n from 'i18next';
-import translationEnglish from '../translations/locales/en-US/translations.json';
+import { initReactI18next } from 'react-i18next';
+
+import translations from '../translations/locales/en-US/translations.json';
 
 i18n
+  .use(initReactI18next)
   .init({
-    fallbackLng: 'en',
     lng: 'en-US',
+    fallbackLng: 'en-US',
+
+    // have a common namespace used around the full app
     ns: ['translations'],
-    defaultNS: ['translations'],
+    defaultNS: 'translations',
+
     debug: false,
-    saveMissing: false,
+
     interpolation: {
-      escapeValue: false, // react already safes from xss
+      escapeValue: false, // not needed for react!!
     },
-    resources: {
-      en: {
-        translations: translationEnglish
-      }
-    },
-    react: {
-      wait: false,
-      nsMode: 'fallback'
-    }
+
+    resources: { 'en-US': { translations } },
   });
+
+
 export default i18n;
